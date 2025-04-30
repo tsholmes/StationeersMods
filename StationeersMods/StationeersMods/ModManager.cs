@@ -544,8 +544,7 @@ namespace StationeersMods
         }
 
         public static async UniTask<IEnumerable<SteamTransport.ItemWrapper>> Workshop_QueryItemsAsync(
-            SteamTransport.WorkshopType itemType,
-            uint page = 1)
+            SteamTransport.WorkshopType itemType)
         {
             List<Item> entries;
             IEnumerable<SteamTransport.ItemWrapper> result;
@@ -557,22 +556,39 @@ namespace StationeersMods
             else
             {
                 entries = new List<Item>();
+                var seenEntries = new HashSet<PublishedFileId>();
                 try
                 {
+                  for (var page = 1; ; page++)
+                  {
                     Query query = Query.Items;
                     query = query.WithTag(GetTagFromType(itemType));
                     var resultPage = await query.AllowCachedResponse(0).WhereUserSubscribed()
                         .GetPageAsync((int) page).AsUniTask();
 
-                    entries = (resultPage.HasValue
-                        ? resultPage.GetValueOrDefault().Entries.ToList()
-                        : null) ?? new List<Item>();
+                    if (resultPage.HasValue)
+                    {
+                      foreach (var item in resultPage.Value.Entries)
+                      {
+                        // check uniqueness on items in case we get duplicates on the next page
+                        if (!seenEntries.Contains(item.Id))
+                        {
+                          seenEntries.Add(item.Id);
+                          entries.Add(item);
+                        }
+                      }
+                    }
 
                     var test = await UniTask.WhenAll(
                         entries
                             .Where(x => x.NeedsUpdate || !Directory.Exists(x.Directory))
                             .Select(x => SteamUGC.DownloadAsync(x.Id).AsUniTask())
                     );
+
+                    if (!resultPage.HasValue || entries.Count >= resultPage.Value.TotalCount || resultPage.Value.ResultCount == 0)
+                      break;
+                    // if we successfully loaded a non-empty page and didn't hit the total count, load another page
+                  }
                 }
                 catch (Exception ex)
                 {
